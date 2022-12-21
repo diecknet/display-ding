@@ -53,7 +53,7 @@ static unsigned char laundrymachine_bits[] = {
 
 void handleRoot() {
   digitalWrite(led, 1);
-  server.send(200, "text/plain", "Curren Status: "+ String(status) +"\r\n");
+  server.send(200, "text/plain", "Current Status: "+ String(status) +"\r\n");
   digitalWrite(led, 0);
 }
 
