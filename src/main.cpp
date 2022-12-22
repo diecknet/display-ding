@@ -247,13 +247,19 @@ void loop(void) {
         }
         dotCount++;
       break;
+      case 3:
+        u8g2.drawUTF8(28, 12, "Waschmaschine");
+        u8g2.drawUTF8(28, 30, "scheduled");
+        u8g2.setFont(u8g2_font_unifont_t_symbols);
+        u8g2.drawGlyph(102, 30, 0x23f0);
+        u8g2.setFont(u8g2_font_7x14_tf);
+      break;
     }
     
     u8g2.sendBuffer();
     u8g2.clearBuffer();
-
   }
-  if(animationCycle >=16) {
+  if(animationCycle >=32) {
     animationCycle = 0;
   } else {
     animationCycle++;
