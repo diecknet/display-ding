@@ -4,17 +4,16 @@
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
-#include <WiFiCredentials.h>
+#include <config.h>
+#include <PubSubClient.h>
 
-const char* ssid = STASSID;
-const char* password = STAPSK;
+const char* ssid = STASSID; // set this in include/config.h
+const char* password = STAPSK; // set this in include/config.h
+const char* mqtt_server = MQTTSERVER; // set this in include/config.h
+
 
 // Display Definition
 U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 5, /*data=*/ 4, /* reset=*/ 16);
-
-ESP8266WebServer server(80);
-
-const int led = 13;
 
 // Display size and coordinates counter
 int screenSizeX = 128;
@@ -25,10 +24,15 @@ int animationCycle = 0;
 
 // state of the wave moving animation
 int wave = 0;
+
 // state of dots animation
 int dotCount = 0;
 String dots = "";
 
+// Setup Webserver
+ESP8266WebServer server(80);
+
+const int led = 13;
 
 // state of the laundrymachine
 // 0 = off
