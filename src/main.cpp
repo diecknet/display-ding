@@ -5,7 +5,9 @@
 #include <config.h>
 
 // Display Definition
-U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 5, /*data=*/ 4, /* reset=*/ 16);
+// U8G2_R2 == flipped screen
+// U8G2_R0 == normal screen
+U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R2, /* clock=*/ 5, /*data=*/ 4, /* reset=*/ 16); 
 
 // Display size and coordinates counter
 int screenSizeX = 128;
