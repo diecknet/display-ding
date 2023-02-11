@@ -1,16 +1,8 @@
-#include <Arduino.h>
-#include <U8g2lib.h>
 #include <ESP8266WiFi.h>
-#include <WiFiClient.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
-#include <config.h>
+#include <U8g2lib.h>
 #include <PubSubClient.h>
-
-const char* ssid = STASSID; // set this in include/config.h
-const char* password = STAPSK; // set this in include/config.h
-const char* mqtt_server = MQTTSERVER; // set this in include/config.h
-
+#include <ArduinoJson.h>
+#include <config.h>
 
 // Display Definition
 U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 5, /*data=*/ 4, /* reset=*/ 16);
@@ -19,26 +11,42 @@ U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ 5, /*data=*/ 4,
 int screenSizeX = 128;
 int screenSizeY = 32;
 
-// animation cycle counter (I don't want to animate in every CPU Cycle)
-int animationCycle = 0;
+const char* ssid = STASSID; // set this in include/config.h
+const char* password = STAPSK; // set this in include/config.h
+const char* mqtt_server = MQTTSERVER; // set this in include/config.h
+const char* mqtt_user = MQTTUSER; // set this in include/config.h
+const char* mqtt_password = MQTTPASS; // set this in include/config.h
+const char* mqtt_topic = MQTTTOPIC; // set this in include/config.h
 
-// state of the wave moving animation
-int wave = 0;
+WiFiClient espWiFiClient;
+PubSubClient mqttClient(espWiFiClient);
+#define MSG_BUFFER_SIZE	(50)
+char msg[MSG_BUFFER_SIZE];
+
+// this is used for non blocking reconnect attempts
+long lastReconnectAttempt = 0;
+
+// this var saves the last animation cycle that happened (I don't want to animate in every CPU Cycle)
+int lastAnimation = 0;
+
+// state of animations
+int movingAnimation = 0;
+int animationStatus = 0;
+
+
 
 // state of dots animation
 int dotCount = 0;
 String dots = "";
-
-// Setup Webserver
-ESP8266WebServer server(80);
-
-const int led = 13;
 
 // state of the laundrymachine
 // 0 = off
 // 1 = on
 // 2 = done
 int status = 0;
+
+// since when is the machine off?
+unsigned long offMillis = 0;
 
 #define laundrymachine_width 26
 #define laundrymachine_height 32
@@ -55,89 +63,17 @@ static unsigned char laundrymachine_bits[] = {
    0x02, 0xf8, 0x00, 0x01, 0x02, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x01,
    0xfe, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00 };
 
-void handleRoot() {
-  digitalWrite(led, 1);
-  server.send(200, "text/plain", "Current Status: "+ String(status) +"\r\n");
-  digitalWrite(led, 0);
-}
 
-void handleUpdateDialog() {
-  /* to update without this form use
-  curl -F "image=@firmware.bin" <ipadr>/update
-  */
-  digitalWrite(led, 1);
-  server.send(200, "text/html", "<form method='POST' action='/update' enctype='multipart/form-data'><input type='file' name='update'><input type='submit' value='Update'></form>");
-  digitalWrite(led, 0);
-}
+void setup_wifi() {
 
-void handleNotFound() {
-  digitalWrite(led, 1);
-  String message = "File Not Found\n\n";
-  message += "URI: ";
-  message += server.uri();
-  message += "\nMethod: ";
-  message += (server.method() == HTTP_GET) ? "GET" : "POST";
-  message += "\nArguments: ";
-  message += server.args();
-  message += "\n";
-  for (uint8_t i = 0; i < server.args(); i++) {
-    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
-  }
-  server.send(404, "text/plain", message);
-  digitalWrite(led, 0);
-}
+  delay(10);
+  Serial.println();
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
 
-void handlePostData() {
-  if (server.method() != HTTP_POST) {
-    digitalWrite(led, 1);
-    server.send(405, "text/plain", "Method Not Allowed. Please use POST.");
-    digitalWrite(led, 0);
-  } else {
-    digitalWrite(led, 1);
-    String message = "";
-    for (uint8_t i = 0; i < server.args(); i++) {
-      message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
-      if(server.argName(i) == "status") {
-        status = server.arg(i).toInt();
-        // reset dot animation variables
-        dotCount = 0;
-        dots = "";
-      }
-
-      
-    }
-    server.send(200, "text/plain", message);
-    Serial.println("POST data received: " + message);
-    digitalWrite(led, 0);
-  }
-}
-
-void drawLaundryWaves() {
-  // start drawing at x=8 until x=19
-  for(int i = 8; i < 19; i++ )
-  {
-    u8g2_uint_t y = 18 + sin((i*0.2)-wave) * 1.7;
-    u8g2.drawPixel(i, y);
-  }
-  wave++;
-  if(wave > 32) { wave = 0; }
-}
-
-void setup(void) {
-  pinMode(led, OUTPUT);
-  digitalWrite(led, 0);
-  Serial.begin(115200);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  Serial.println("");
-  
-  u8g2.begin();
-  u8g2.setFont(u8g2_font_7x14_tf); // this font is used everywhere in the program
-  u8g2.drawStr(0, 16, "Connecting to WiFi");
-  u8g2.sendBuffer();
-  
 
-  // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -145,79 +81,141 @@ void setup(void) {
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
 
-  u8g2.clearBuffer();
+  randomSeed(micros());
 
   Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(ssid);
+  Serial.println("WiFi connected");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-
-  if (MDNS.begin("waschmaschine-display")) {
-    Serial.println("MDNS responder started");
-  }
-
-
-
-  server.on("/", handleRoot);
-
-
-  // Firmware Update via Web
-  server.on("/uploadfirmware", handleUpdateDialog);
-  server.on("/update", HTTP_POST, []() {
-      server.sendHeader("Connection", "close");
-      server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-      ESP.restart();
-    }, []() {
-      HTTPUpload& upload = server.upload();
-      if (upload.status == UPLOAD_FILE_START) {
-        Serial.setDebugOutput(true);
-        WiFiUDP::stopAll();
-        Serial.printf("Update: %s\n", upload.filename.c_str());
-        uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-        if (!Update.begin(maxSketchSpace)) { //start with max available size
-          Update.printError(Serial);
-        }
-      } else if (upload.status == UPLOAD_FILE_WRITE) {
-        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-          Update.printError(Serial);
-        }
-      } else if (upload.status == UPLOAD_FILE_END) {
-        if (Update.end(true)) { //true to set the size to the current progress
-          Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
-        } else {
-          Update.printError(Serial);
-        }
-        Serial.setDebugOutput(false);
-      }
-      yield();
-    });
-
-  server.on("/api/setdisplay", handlePostData);
-  server.onNotFound(handleNotFound);
-
-  server.begin();
-  Serial.println("HTTP server started");
-
 }
 
-void loop(void) {
-  server.handleClient();
-  MDNS.update();
+void callback(char* topic, byte* payload, unsigned int length) {
+  // this callback gets executed, when a message arrives via MQTT
+  Serial.print("Message arrived via MQTT [");
+  Serial.print(topic);
+  Serial.print("] ");
+  Serial.println("");
+  
+  // parse JSON with ArduinoJson
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  // Test if parsing succeeds.
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.f_str());
+    return;
+  }
+  // fetch values
+  status = doc["status"];
+  const char* timestamp = doc["timestamp"];
 
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print("WiFi Connection lost?");
-    u8g2.clearBuffer();
-    u8g2.drawStr(0, 16, "WiFi Interrupted");
-    u8g2.sendBuffer();
-    u8g2.clearBuffer();
+  Serial.println("Status: " + String(status));
+  Serial.println("Timestamp: " + String(timestamp));
+  if(status == 0 && offMillis == 0) {
+    offMillis = millis();
+  } else if(status != 0 && offMillis != 0) {
+    offMillis = 0;
+  }
+}
+
+void reconnect() {
+  // non blocking reconnect
+  long now = millis();
+  if(now - lastReconnectAttempt > 5000) {
+    Serial.println("lastReconnectAttempt: " + String(lastReconnectAttempt));
+    lastReconnectAttempt = now;
+    
+    // Check if we're connected to WiFi
+    if(WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi Connection lost");
+    } else {
+      Serial.println("WiFi is connected");
+      // Check if we're reconnected to MQTT
+      if(!mqttClient.connected()) {
+        Serial.print("Attempting MQTT connection...");
+        // Create a random client ID
+        String clientId = "ESP8266Client-";
+        clientId += String(random(0xffff), HEX);
+        // Attempt to connect
+        if (mqttClient.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
+          Serial.println("MQTT connected");
+          // resubscribe
+          mqttClient.subscribe(mqtt_topic);
+        } else {
+          Serial.print("failed, rc=");
+          Serial.print(mqttClient.state());
+          Serial.println(" try again in 5 seconds");
+          Serial.println("WiFi status: " + String(WiFi.status()));
+
+        }
+      } else {
+        Serial.println("MQTT is connected");
+      }
+    }
+  }
+}
+
+void drawLaundryWaves() {
+  // start drawing at x=8 until x=19
+  for(int i = 8; i < 19; i++ )
+  {
+    u8g2_uint_t y = 18 + sin((i*0.2)-movingAnimation) * 1.7;
+    u8g2.drawPixel(i, y);
+  }
+  movingAnimation++;
+  if(movingAnimation > 32) { movingAnimation = 0; }
+}
+
+void flash_screen() {
+  // fill whole screen with white rectangle
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, 0, 128, 64);
+  u8g2.sendBuffer();
+  u8g2.clearBuffer();
+}
+
+void setup() {
+  Serial.begin(115200);
+  // setup display
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_7x14_tf); // this font is used everywhere in the program
+  
+  flash_screen();
+
+  // setup wifi
+  setup_wifi();
+  // connect to mqtt server
+  mqttClient.setServer(mqtt_server, 1883);
+  mqttClient.setCallback(callback);
+}
+
+void loop() {
+
+  if (!mqttClient.connected()) {
+    reconnect();
+  }
+  mqttClient.loop();
+
+  // reboot after 33 days
+  if(millis() >= 2851200000) {
+    flash_screen();
+    ESP.restart();
   }
 
-  // do animation/draw stuff on the display only on cycle 0
-  if(animationCycle == 0) {
-    u8g2.setDrawColor(1);
-    u8g2.drawXBM(0,0,laundrymachine_width,laundrymachine_height,laundrymachine_bits);
+  // if status is OFF for atleast 1 hour, switch screen off/power saving mode
+  if(status == 0 && (millis() - offMillis) >= 3600000) {
+    u8g2.setPowerSave(1);
+  } else {
+    u8g2.setPowerSave(0);
+  }
 
+  // do animation/draw stuff after atleast this amount of ms
+  if((millis() - lastAnimation) >= 50) {
+    lastAnimation = millis();
+    u8g2.setDrawColor(1);
+    if(status != 2 || (status == 2 && animationStatus < 300)) {
+          u8g2.drawXBM(0,0,laundrymachine_width,laundrymachine_height,laundrymachine_bits);
+    }
     switch(status) {
       case 0:
         u8g2.drawUTF8(28, 12, "Waschmaschine");
@@ -238,18 +236,37 @@ void loop(void) {
         dotCount++;
       break;
       case 2:
-        u8g2.drawUTF8(28, 12, "Waschmaschine");
-        u8g2.drawUTF8(28, 30, "ist fertig");
-        u8g2.drawUTF8(100, 30,  dots.c_str());
-        u8g2.drawDisc(13, 18, 5, U8G2_DRAW_ALL);
-        if(dotCount > 10) {
-          dotCount = 0;
-          dots = "";
+        if(animationStatus < 300) {
+          u8g2.drawUTF8(28, 12, "Waschmaschine");
+          u8g2.drawUTF8(28, 30, "ist fertig");
+          u8g2.drawUTF8(100, 30,  dots.c_str());
+          u8g2.drawDisc(13, 18, 5, U8G2_DRAW_ALL);
+          if(dotCount > 10) {
+            dotCount = 0;
+            dots = "";
+          }
+          if(dotCount < 3) {
+            dots += "!";
+          }
+          dotCount++;
+        } else {
+            if(animationStatus <= 428 && animationStatus >= 364) {
+              movingAnimation--; // move animation to the left
+            } else {
+              movingAnimation++; // move animation to the right
+            }
+            u8g2.drawXBM(movingAnimation*2,0,laundrymachine_width,laundrymachine_height,laundrymachine_bits);
+            u8g2.drawDisc(13+(movingAnimation*2), 18, 5, U8G2_DRAW_ALL);
+            
+            // reset animation
+            if(animationStatus > 428) {
+                movingAnimation = 0; 
+                animationStatus = 0;
+            }
         }
-        if(dotCount < 3) {
-          dots += "!";
-        }
-        dotCount++;
+        // increase animation counter
+        animationStatus++;
+
       break;
       case 3:
         u8g2.drawUTF8(28, 12, "Waschmaschine");
@@ -262,10 +279,5 @@ void loop(void) {
     
     u8g2.sendBuffer();
     u8g2.clearBuffer();
-  }
-  if(animationCycle >=32) {
-    animationCycle = 0;
-  } else {
-    animationCycle++;
   }
 }
