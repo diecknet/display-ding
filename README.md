@@ -1,6 +1,7 @@
 # display-ding
 
 I created this to use a Heltec ESP8266 board with an OLED display to show the Status of my laundry machine.
+[I used this board from az-delivery](https://www.az-delivery.de/products/esp8266-mikrocontroller-mit-integrierten-0-91-oled-display).
 Text on the display is in German, but feel free to fork this repo and change to your likings.
 
 ![display-ding-scheduled](https://user-images.githubusercontent.com/54552094/218286072-19b7fbf4-4b58-4602-a8a9-38126276f77a.png)
